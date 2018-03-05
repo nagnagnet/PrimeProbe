@@ -210,17 +210,12 @@ int main(int argc, char **argv){
 	if(w == 0){
 		exit(0);
 	} else {
-		fp = fopen("result.py","w");
+		fp = fopen("data.txt","w");
 	}
 	if(fp == NULL){
 		fprintf(stderr,"file errror\n");
 		exit(1);
 	}
-
-	fprintf(fp,"import matplotlib.pyplot as plt\n");
-	
-	output_num = 0;
-	n = 0;
 
 	for(i = 0; i < 8; i++){
 		for(j = 0; j < SET; j = j + 64){
@@ -240,51 +235,12 @@ int main(int argc, char **argv){
 				time = t2 - t1;
 				array[k] = time;
 			}
-
-			hit = 0;
-			for(k = 0; k < ATTACK; k++){
-				if(array[k] > THR2) hit++;
-			}
-
-			fprintf(fp,"#%d,%d ",i,j/64);
 			for(k = 0; k < ATTACK; k++){
 				fprintf(fp,"%d ",array[k]);
 			}
 			fprintf(fp,"\n");
-
-			if(hit > 30 && hit < 200){
-				fprintf(fp,"y%d = [",output_num);
-				for(k = 0; k < hit; k++){
-					if(k == hit-1){
-						fprintf(fp,"%d]\n",n);
-					} else {
-						fprintf(fp,"%d,",n);
-					}
-				}
-
-				int flag = 0;
-				fprintf(fp,"x%d = [",output_num);
-				for(k = 0; k < ATTACK; k++){
-					if(array[k] > THR2){
-						if(flag) fprintf(fp,",");
-						fprintf(fp,"%d",k);
-						flag++;
-					}
-				}
-				fprintf(fp,"]\n");
-
-				output_num++;
-			}
-			n++;
 		}
 	}
-	fprintf(stderr,"output_num %d\n",output_num);
-
-	for(i = 0; i < output_num; i++){
-		fprintf(fp,"plt.scatter(x%d, y%d, c = 'b')\n", i, i);
-	}
-
-	fprintf(fp,"plt.xlim([0,%d])\nplt.ylim([0,255])\nplt.show()\n",ATTACK);
 	fclose(fp);
 
 	fprintf(stderr,"\nend\n");
@@ -293,7 +249,7 @@ int main(int argc, char **argv){
 
 void loop(){
 	int i;
-	for(i = 0; i < 250000; i++);
+	for(i = 0; i < 25000; i++);
 }
 
 void shuffle(int *array, int set, int n){
